@@ -760,6 +760,7 @@ static int do_gc(struct ssd *ssd, bool force)
             lunp->gc_endtime = lunp->next_lun_avail_time;
         }
     }
+    ssd->gc_erase_block_count += spp->nchs * spp->luns_per_ch;
 
     /* update line status */
     mark_line_free(ssd, &ppa);
@@ -819,6 +820,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
     }
 
+    printf("req->nlb %10d spp->secs_per_pg: %10d req->meta_size: %10ld\r\n", req->nlb, spp->secs_per_pg, req->meta_size);
     while (should_gc_high(ssd)) {
         /* perform GC here until !should_gc(ssd) */
         r = do_gc(ssd, true);
@@ -858,6 +860,51 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     return maxlat;
 }
 
+
+static void page_status(struct ssd *ssd) {
+    FILE *ssd_page_status = fopen("log_ssd_page_status", "w");
+    struct ssd_channel *chs;
+    struct nand_lun *luns;
+    struct nand_plane *pls;
+    struct nand_block *blks;
+    struct nand_page *pgs;
+
+    int ch_idx;
+    int lun_idx;
+    int pl_idx;
+    int blk_idx;
+    int pg_idx;
+
+    for (ch_idx = 0; ch_idx < ssd->sp.nchs; ch_idx++) {
+        chs = ssd->ch + ch_idx;
+        for (lun_idx = 0; lun_idx < chs->nluns; lun_idx++) {
+            luns = chs->lun + lun_idx;
+            for (pl_idx = 0; pl_idx < luns->npls; pl_idx++) {
+                pls = luns->pl + pl_idx;
+                for (blk_idx = 0; blk_idx < pls->nblks; blk_idx++) {
+                    blks = pls->blk + blk_idx;
+                    for (pg_idx = 0; pg_idx < blks->npgs; pg_idx++) {
+                        pgs = blks->pg + pg_idx;
+                        if (pgs->status == PG_VALID) {
+                            fprintf(ssd_page_status, "\033[0;32mV\033[0;37m ");
+                        } else if (pgs->status == PG_INVALID) {
+                            fprintf(ssd_page_status, "\033[0;31mX\033[0;37m ");
+                        } else if (pgs->status == PG_FREE) {
+                            fprintf(ssd_page_status, "\033[0;34mF\033[0;37m ");
+                        } else {
+                            fprintf(ssd_page_status, "  ");
+                        }
+                    }
+                    fprintf(ssd_page_status, "\n");
+                }
+            }
+            fprintf(ssd_page_status, "\n");
+        }
+    }
+    fflush(ssd_page_status);
+    fclose(ssd_page_status);
+}
+
 static void *ftl_thread(void *arg)
 {
     FemuCtrl *n = (FemuCtrl *)arg;
@@ -867,14 +914,41 @@ static void *ftl_thread(void *arg)
     int rc;
     int i;
 
+    FILE *IOPS = fopen("log_IOPS", "w+");
+    FILE *throughput = fopen("log_throughput", "w+");
+    FILE *GC = fopen("log_GC", "w+");
+    FILE *WAF = fopen("log_WAF", "w+");
+
+    // 실제 시간 기준
+    uint64_t init_time;
+    uint64_t curr_time_1sec;
+    uint64_t prev_time_1sec;
+    uint64_t curr_time_10sec;
+    uint64_t prev_time_10sec;
+
+    uint64_t read_IO, write_IO;
+    uint64_t read_throughput, write_throughput;
+    uint64_t read_page_count, write_page_count;
+
+    read_IO = write_IO = read_throughput = write_throughput = 0;
+    read_page_count = write_page_count = 0;
+
     while (!*(ssd->dataplane_started_ptr)) {
         usleep(100000);
     }
+
+    curr_time_1sec = \
+    prev_time_1sec = \
+    curr_time_10sec = \
+    prev_time_10sec = \
+    init_time = \
+    qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
 
     /* FIXME: not safe, to handle ->to_ftl and ->to_poller gracefully */
     ssd->to_ftl = n->to_ftl;
     ssd->to_poller = n->to_poller;
 
+    ssd->gc_erase_block_count = 0;
     while (1) {
         for (i = 1; i <= n->nr_pollers; i++) {
             if (!ssd->to_ftl[i] || !femu_ring_count(ssd->to_ftl[i]))
@@ -888,9 +962,15 @@ static void *ftl_thread(void *arg)
             ftl_assert(req);
             switch (req->cmd.opcode) {
             case NVME_CMD_WRITE:
+                write_IO++;
+                write_throughput += req->nlb * ssd->sp.secsz;
+                write_page_count += (req->nlb - 1) / ssd->sp.secs_per_pg;
                 lat = ssd_write(ssd, req);
                 break;
             case NVME_CMD_READ:
+                read_IO++;
+                read_throughput += req->nlb * ssd->sp.secsz;
+                read_page_count += (req->nlb - 1) / ssd->sp.secs_per_pg;
                 lat = ssd_read(ssd, req);
                 break;
             case NVME_CMD_DSM:
@@ -899,6 +979,48 @@ static void *ftl_thread(void *arg)
             default:
                 //ftl_err("FTL received unkown request type, ERROR\n");
                 ;
+            }
+
+            curr_time_1sec = curr_time_10sec = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+            if (curr_time_1sec - prev_time_1sec >= 1e9) {
+                page_status(ssd);
+                prev_time_1sec = curr_time_1sec;
+                fprintf(IOPS, "Time: %10ld ms read IO: %10ld\twrite IO: %10ld\n", \
+                (curr_time_1sec - init_time) / (uint64_t)1e6, read_IO, write_IO);
+                
+                fflush(IOPS);
+
+                fprintf(throughput, "Time: %10ld ms read throughput: %10ld byte write throughput: %10ld byte\n", \
+                (curr_time_1sec - init_time) / (uint64_t)1e6, read_throughput, write_throughput);
+                
+                fprintf(throughput, "Time: %10ld ms read throughput: %10ld KB   write throughput: %10ld KB  \n", \
+                (curr_time_1sec - init_time) / (uint64_t)1e6, read_throughput / (uint64_t)1024, write_throughput / (uint64_t)1024);
+                
+                fprintf(throughput, "Time: %10ld ms read throughput: %10ld KiB  write throughput: %10ld KiB \n", \
+                (curr_time_1sec - init_time) / (uint64_t)1e6, read_throughput / (uint64_t)1000, write_throughput / (uint64_t)1000);
+                
+                fprintf(throughput, "Time: %10ld ms read throughput: %10ld MB   write throughput: %10ld MB  \n", \
+                (curr_time_1sec - init_time) / (uint64_t)1e6, read_throughput / (uint64_t)(1024 * 1024), write_throughput / (uint64_t)(1024 * 1024));
+                
+                fprintf(throughput, "Time: %10ld ms read throughput: %10ld MiB  write throughput: %10ld MiB \n", \
+                (curr_time_1sec - init_time) / (uint64_t)1e6, read_throughput / (uint64_t)(1000 * 1000), write_throughput / (uint64_t)(1000 * 1000));
+                
+                fflush(throughput);
+                read_IO = write_IO = read_throughput = write_throughput = 0;
+            }
+            if (curr_time_10sec - prev_time_10sec >= 1e10) {
+                prev_time_10sec = curr_time_10sec;
+                if (read_IO + write_IO > 0) {
+                    fprintf(WAF, "Time: %10ld ms WAF: %10lf\n", \
+                    (curr_time_10sec - init_time) / (uint64_t)1e6, (double)(read_page_count + write_page_count) / (double)(read_IO + write_IO));
+                    fflush(WAF);
+                }
+
+                fprintf(GC, "Time: %10ld ms GC erase block: %10ld\n", \
+                (curr_time_10sec - init_time) / (uint64_t)1e6, ssd->gc_erase_block_count);
+                
+                fflush(GC);
+                ssd->gc_erase_block_count = read_page_count = write_page_count = 0;
             }
 
             req->reqlat = lat;
