@@ -1015,8 +1015,7 @@ static void *ftl_thread(void *arg)
                 (curr_time_10sec - init_time) / (uint64_t)1e6, ssd->gc_erase_block_count);
                 
                 fflush(GC);
-				req_size = ssd->gc_data_size_for_WAF = 0;
-                ssd->gc_erase_block_count = read_page_count = write_page_count = 0;
+				req_size = ssd->gc_data_size_for_WAF = ssd->gc_erase_block_count = 0;
             }
 
             req->reqlat = lat;
