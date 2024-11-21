@@ -214,7 +214,7 @@ struct s_monitering {
 
     uint64_t gc_erase_block_count;
 	uint64_t gc_data_size_for_WAF;
-}	t_monitering;
+};
 
 struct ssd {
     char *ssdname;
@@ -231,7 +231,7 @@ struct ssd {
     bool *dataplane_started_ptr;
     QemuThread ftl_thread;
 
-	t_monitering moni;
+	struct s_monitering moni;
 };
 
 
