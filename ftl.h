@@ -194,6 +194,28 @@ struct nand_cmd {
     int64_t stime; /* Coperd: request arrival time */
 };
 
+struct s_monitering {
+	FILE *IOPS;
+	FILE *throughput;
+	FILE *GC;
+	FILE *WAF;
+
+	uint64_t init_time;
+    uint64_t curr_time_1sec;
+    uint64_t prev_time_1sec;
+    uint64_t curr_time_10sec;
+    uint64_t prev_time_10sec;
+
+	uint64_t read_IO;
+	uint64_t write_IO;
+    uint64_t read_throughput;
+	uint64_t write_throughput;
+    uint64_t req_size;
+
+    uint64_t gc_erase_block_count;
+	uint64_t gc_data_size_for_WAF;
+}	t_monitering;
+
 struct ssd {
     char *ssdname;
     struct ssdparams sp;
@@ -208,9 +230,10 @@ struct ssd {
     struct rte_ring **to_poller;
     bool *dataplane_started_ptr;
     QemuThread ftl_thread;
-    uint64_t gc_erase_block_count;
-	uint64_t gc_data_size_for_WAF;
+
+	t_monitering moni;
 };
+
 
 void ssd_init(FemuCtrl *n);
 

@@ -703,7 +703,10 @@ static void clean_one_block(struct ssd *ssd, struct ppa *ppa)
             gc_read_page(ssd, ppa);
             /* delay the maptbl update until "write" happens */
             gc_write_page(ssd, ppa);
-            ssd->gc_data_size_for_WAF += spp->secsz * spp->secs_per_pg;
+
+			/* GC에서 이동되는 VALID페이지 크기 합산.               */
+			/* 원래 써야할 페이지 갯수를 구할 수 없기 때문에 크기를 측정. */
+            ssd->moni.gc_data_size_for_WAF += spp->secsz * spp->secs_per_pg;
             cnt++;
         }
     }
@@ -761,7 +764,9 @@ static int do_gc(struct ssd *ssd, bool force)
             lunp->gc_endtime = lunp->next_lun_avail_time;
         }
     }
-    ssd->gc_erase_block_count += spp->nchs * spp->luns_per_ch;
+
+	/* 하나의 라인에 속해있는 블럭 수. */
+    ssd->moni.gc_erase_block_count += spp->nchs * spp->luns_per_ch;
 
     /* update line status */
     mark_line_free(ssd, &ppa);
@@ -801,6 +806,11 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
         sublat = ssd_advance_status(ssd, &ppa, &srd);
         maxlat = (sublat > maxlat) ? sublat : maxlat;
     }
+
+	ssd->moni.read_IO++;
+    ssd->moni.read_throughput += req->nlb * ssd->sp.secsz;
+	/* WAF측정 시 읽기 크기는 고려하지 않음. */
+    // ssd->moni.req_size += req->nlb * ssd->sp.secsz;
 
     return maxlat;
 }
@@ -857,9 +867,16 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         maxlat = (curlat > maxlat) ? curlat : maxlat;
     }
 
+
+	/* nlb = 쓰는 섹터 수  */
+	/* secsz = 섹터의 크기 */
+	/* 페이지 개수는 어떻게? */
+	ssd->moni.write_IO++;
+	ssd->moni.write_throughput += req->nlb * ssd->sp.secsz;
+	ssd->moni.req_size += req->nlb * ssd->sp.secsz;
+
     return maxlat;
 }
-
 
 static void page_status(struct ssd *ssd) {
     FILE *ssd_page_status = fopen("log_ssd_page_status", "w");
@@ -905,6 +922,84 @@ static void page_status(struct ssd *ssd) {
     fclose(ssd_page_status);
 }
 
+static int monitering_init(t_monitering *moni) {
+    moni->IOPS = fopen("log_IOPS", "w+");
+	if (moni->IOPS == NULL) {
+		perror("fopen(\"log_IOPS\", \"w+\")");
+		return 1;
+	}
+    moni->throughput = fopen("log_throughput", "w+");
+	if (moni->throughput == NULL) {
+		free(moni->IOPS);
+		perror("fopen(\"log_throughput\", \"w+\")");
+		return 2;
+	}
+    moni->GC = fopen("log_GC", "w+");
+	if (moni->GC == NULL) {
+		free(moni->IOPS);
+		free(moni->throughput);
+		perror("fopen(\"log_GC\", \"w+\")");
+		return 3;
+	}
+    moni->WAF = fopen("log_WAF", "w+");
+	if (moni->WAF == NULL) {
+		free(moni->IOPS);
+		free(moni->throughput);
+		free(moni->GC);
+		perror("fopen(\"log_WAF\", \"w+\")");
+		return 4;
+	}
+
+	moni->read_IO = 0;
+	moni->write_IO = 0;
+    moni->read_throughput = 0;
+	moni->write_throughput = 0;
+    moni->req_size = 0;
+
+	moni->gc_erase_block_count = 0;
+	moni->gc_data_size_for_WAF = 0;
+
+	moni->init_time = \
+	moni->curr_time_1sec = \
+	moni->prev_time_1sec = \
+	moni->curr_time_10sec = \
+	moni->prev_time_10sec = \
+	qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+	return 0;
+}
+
+static void print_1sec_monitering(t_monitering *moni) {
+	fprintf(moni->IOPS, "%10ld %10ld\n", \
+	(moni->curr_time_1sec - moni->init_time) / (uint64_t)1e6, moni->read_IO + moni->write_IO);
+	fflush(moni->IOPS);
+
+	fprintf(moni->throughput, "%10ld %10lf\n", \
+	(moni->curr_time_1sec - moni->init_time) / (uint64_t)1e6, \
+	(double)(moni->read_throughput + moni->write_throughput) / (double)(1024 * 1024));
+	fflush(moni->throughput);
+
+	moni->prev_time_1sec = moni->curr_time_1sec;
+	moni->read_IO = moni->write_IO = moni->read_throughput = moni->write_throughput = 0;
+}
+
+static void print_10sec_monitering(t_monitering *moni) {
+	if (moni->req_size != 0) {
+		fprintf(moni->WAF, "%10ld %10lf\n", \
+		(moni->curr_time_10sec - moni->init_time) / (uint64_t)1e6, (double)(moni->req_size + moni->gc_data_size_for_WAF) / (double)(moni->req_size));
+	} else {
+		fprintf(moni->WAF, "%10ld none I/O\n", \
+		(moni->curr_time_10sec - moni->init_time) / (uint64_t)1e6);
+	}
+	fflush(moni->WAF);
+
+	fprintf(moni->GC, "%10ld %10ld\n", \
+	(moni->curr_time_10sec - moni->init_time) / (uint64_t)1e6, moni->gc_erase_block_count);
+	fflush(moni->GC);
+
+	moni->prev_time_10sec = moni->curr_time_10sec;
+	moni->req_size = moni->gc_data_size_for_WAF = moni->gc_erase_block_count = 0;
+}
+
 static void *ftl_thread(void *arg)
 {
     FemuCtrl *n = (FemuCtrl *)arg;
@@ -914,48 +1009,21 @@ static void *ftl_thread(void *arg)
     int rc;
     int i;
 
-    FILE *IOPS = fopen("log_IOPS", "w+");
-    FILE *throughput = fopen("log_throughput", "w+");
-    FILE *GC = fopen("log_GC", "w+");
-    FILE *WAF = fopen("log_WAF", "w+");
-
-
-    // 실제 시간 기준
-    fprintf(IOPS, "Time Read Write\n");
-    fprintf(throughput, "Time Read Write\n");
-    fprintf(GC, "Time Blocks\n");
-    fprintf(WAF, "Time WAF\n");
-    uint64_t init_time;
-    uint64_t curr_time_1sec;
-    uint64_t prev_time_1sec;
-    uint64_t curr_time_10sec;
-    uint64_t prev_time_10sec;
-
-    uint64_t read_IO, write_IO;
-    uint64_t read_throughput, write_throughput;
-    uint64_t req_size;
-
-    read_IO = write_IO = read_throughput = write_throughput = 0;
-    req_size = 0;
-
     while (!*(ssd->dataplane_started_ptr)) {
         usleep(100000);
     }
     page_status(ssd);
 
-    curr_time_1sec = \
-    prev_time_1sec = \
-    curr_time_10sec = \
-    prev_time_10sec = \
-    init_time = \
-    qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+	/* 모니터링 변수 초기화. */
+	if (monitering_init(&ssd->moni)) {
+		ftl_err("monitering init ERROR\n");
+		return NULL;
+	}
 
     /* FIXME: not safe, to handle ->to_ftl and ->to_poller gracefully */
     ssd->to_ftl = n->to_ftl;
     ssd->to_poller = n->to_poller;
 
-    ssd->gc_erase_block_count = 0;
-    ssd->gc_data_size_for_WAF = 0;
     while (1) {
         for (i = 1; i <= n->nr_pollers; i++) {
             if (!ssd->to_ftl[i] || !femu_ring_count(ssd->to_ftl[i]))
@@ -969,15 +1037,9 @@ static void *ftl_thread(void *arg)
             ftl_assert(req);
             switch (req->cmd.opcode) {
             case NVME_CMD_WRITE:
-                write_IO++;
-                write_throughput += req->nlb * ssd->sp.secsz;
-                req_size += req->nlb * ssd->sp.secsz;
                 lat = ssd_write(ssd, req);
                 break;
             case NVME_CMD_READ:
-                read_IO++;
-                read_throughput += req->nlb * ssd->sp.secsz;
-                req_size += req->nlb * ssd->sp.secsz;
                 lat = ssd_read(ssd, req);
                 break;
             case NVME_CMD_DSM:
@@ -988,35 +1050,14 @@ static void *ftl_thread(void *arg)
                 ;
             }
 
-            curr_time_1sec = curr_time_10sec = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
-            if (curr_time_1sec - prev_time_1sec >= 1e9) {
-                prev_time_1sec = curr_time_1sec;
-                fprintf(IOPS, "%10ld %10ld %10ld\n", \
-                (curr_time_1sec - init_time) / (uint64_t)1e6, read_IO, write_IO);
-                
-                fflush(IOPS);
-
-                fprintf(throughput, "%10ld %10ld %10ld\n", \
-                (curr_time_1sec - init_time) / (uint64_t)1e6, read_throughput / (uint64_t)(1024 * 1024), write_throughput / (uint64_t)(1024 * 1024));
-                
-                
-                fflush(throughput);
-                read_IO = write_IO = read_throughput = write_throughput = 0;
-            }
-            if (curr_time_10sec - prev_time_10sec >= 1e10) {
-                prev_time_10sec = curr_time_10sec;
-                if (read_IO + write_IO > 0) {
-                    fprintf(WAF, "%10ld %10lf\n", \
-                    (curr_time_10sec - init_time) / (uint64_t)1e6, (double)(req_size + ssd->gc_data_size_for_WAF) / (double)(req_size));
-                    fflush(WAF);
-                }
-
-                fprintf(GC, "%10ld %10ld\n", \
-                (curr_time_10sec - init_time) / (uint64_t)1e6, ssd->gc_erase_block_count);
-                
-                fflush(GC);
-				req_size = ssd->gc_data_size_for_WAF = ssd->gc_erase_block_count = 0;
-            }
+			/* 매 순간 측정 이후 모니터링값 출력. */
+            moni->curr_time_1sec = moni->curr_time_10sec = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+			/* 측정 시간이 1초가 되면 출력 */
+			if (moni->curr_time_1sec - moni->prev_time_1sec >= 1e9)
+				print_1sec_monitering(&ssd->moni);
+			/* 측정 시간이 10초가 되면 출력 */
+			if (moni->curr_time_10sec - moni->prev_time_10sec >= 1e10)
+				print_10sec_monitering(&ssd->moni);
 
             req->reqlat = lat;
             req->expire_time += lat;
