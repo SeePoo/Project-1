@@ -922,7 +922,7 @@ static void page_status(struct ssd *ssd) {
     fclose(ssd_page_status);
 }
 
-static int monitering_init(t_monitering *moni) {
+static int monitering_init(struct s_monitering *moni) {
     moni->IOPS = fopen("log_IOPS", "w+");
 	if (moni->IOPS == NULL) {
 		perror("fopen(\"log_IOPS\", \"w+\")");
@@ -968,7 +968,7 @@ static int monitering_init(t_monitering *moni) {
 	return 0;
 }
 
-static void print_1sec_monitering(t_monitering *moni) {
+static void print_1sec_monitering(struct s_monitering *moni) {
 	fprintf(moni->IOPS, "%10ld %10ld\n", \
 	(moni->curr_time_1sec - moni->init_time) / (uint64_t)1e6, moni->read_IO + moni->write_IO);
 	fflush(moni->IOPS);
@@ -982,7 +982,7 @@ static void print_1sec_monitering(t_monitering *moni) {
 	moni->read_IO = moni->write_IO = moni->read_throughput = moni->write_throughput = 0;
 }
 
-static void print_10sec_monitering(t_monitering *moni) {
+static void print_10sec_monitering(struct s_monitering *moni) {
 	if (moni->req_size != 0) {
 		fprintf(moni->WAF, "%10ld %10lf\n", \
 		(moni->curr_time_10sec - moni->init_time) / (uint64_t)1e6, (double)(moni->req_size + moni->gc_data_size_for_WAF) / (double)(moni->req_size));
@@ -1051,12 +1051,12 @@ static void *ftl_thread(void *arg)
             }
 
 			/* 매 순간 측정 이후 모니터링값 출력. */
-            moni->curr_time_1sec = moni->curr_time_10sec = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+            ssd->moni.curr_time_1sec = ssd->moni.curr_time_10sec = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
 			/* 측정 시간이 1초가 되면 출력 */
-			if (moni->curr_time_1sec - moni->prev_time_1sec >= 1e9)
+			if (ssd->moni.curr_time_1sec - ssd->moni.prev_time_1sec >= 1e9)
 				print_1sec_monitering(&ssd->moni);
 			/* 측정 시간이 10초가 되면 출력 */
-			if (moni->curr_time_10sec - moni->prev_time_10sec >= 1e10)
+			if (ssd->moni.curr_time_10sec - ssd->moni.prev_time_10sec >= 1e10)
 				print_10sec_monitering(&ssd->moni);
 
             req->reqlat = lat;
