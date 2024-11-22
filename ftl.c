@@ -908,34 +908,50 @@ static void LPN_status(struct ssd *ssd) {
 	uint64_t tmp_lpn;
 	uint64_t access_count;
 
-	for (lun_idx = 0; lun_idx < spp->luns_per_ch; lun_idx++) {
-		for (ch_idx = 0; ch_idx < spp->nchs; ch_idx++) {
-			for (pg_idx = 0; pg_idx < spp->pgs_per_blk; pg_idx++) {
-				for (blk_idx = 0; blk_idx < spp->blks_per_pl; blk_idx++) {
-					for (pl_idx = 0; pl_idx < spp->pls_per_lun; pl_idx++) {
-						tmp_ppa.g.ch = ch_idx;
-						tmp_ppa.g.lun = lun_idx;
-						tmp_ppa.g.pl = pl_idx;
-						tmp_ppa.g.blk = blk_idx;
-						tmp_ppa.g.pg = pg_idx;
-						tmp_lpn = get_rmap_ent(ssd, tmp_ppa);
-						access_count = ssd->map_access_count[tmp_lpn];
-						if (access_count < 100) {
-							fprintf(ssd_LPN_status, "\033[0;44mC\033[0;44m ");
-						} else if (access_count < 200) {
-							fprintf(ssd_LPN_status, "\033[0;46mC\033[0;46m ");
-						} else if (access_count < 300) {
-							fprintf(ssd_LPN_status, "\033[0;42mC\033[0;42m ");
-						} else if (access_count < 400) {
-							fprintf(ssd_LPN_status, "\033[0;43mC\033[0;43m ");
-						} else {
-							fprintf(ssd_LPN_status, "\033[0;41mC\033[0;41m ");
-						}
+	for (blk_idx = 0; blk_idx < spp->blks_per_pl; blk_idx++) {
+		for (pg_idx = 0; pg_idx < spp->pgs_per_blk; pg_idx++) {
+			for (ch_idx = 0; ch_idx < spp->nchs; ch_idx++) {
+				for (lun_idx = 0; lun_idx < spp->luns_per_ch; lun_idx++) {
+					tmp_ppa.g.ch = ch_idx;
+					tmp_ppa.g.lun = lun_idx;
+					tmp_ppa.g.pl = pl_idx = 0;
+					tmp_ppa.g.blk = blk_idx;
+					tmp_ppa.g.pg = pg_idx;
+					tmp_lpn = get_rmap_ent(ssd, &tmp_ppa);
+					access_count = ssd->map_access_count[tmp_lpn];
+					if (access_count < 1000) {
+						fprintf(ssd_LPN_status, "\033[0;44mC\033[0m ");
+					} else if (access_count < 2000) {
+						fprintf(ssd_LPN_status, "\033[0;46m\033[0m ");
+					} else if (access_count < 3000) {
+						fprintf(ssd_LPN_status, "\033[0;42mM\033[0m ");
+					} else if (access_count < 4000) {
+						fprintf(ssd_LPN_status, "\033[0;43mW\033[0m ");
+					} else {
+						fprintf(ssd_LPN_status, "\033[0;41mH\033[0m ");
 					}
 				}
 			}
 		}
+		fprintf(ssd_LPN_status, "\n\n");
 	}
+	/*
+	3	4	f	1	2
+	ch	lun	pl	bl	pg
+	0	0	0	0	0
+	0	1	0	0	0
+	1	0	0	0	0
+	1	1	0	0	0
+	2	0	0	0	0
+	2	1	0	0	0
+	3	0	0	0	0
+	3	1	0	0	0
+	0	0	0	0	1
+	.
+	.
+	.
+	0	0	0	1	0
+	*/
 
     fflush(ssd_LPN_status);
     fclose(ssd_LPN_status);
@@ -1031,7 +1047,6 @@ static void *ftl_thread(void *arg)
     while (!*(ssd->dataplane_started_ptr)) {
         usleep(100000);
     }
-    page_status(ssd);
 
 	/* 모니터링 변수 초기화. */
 	if (monitering_init(&ssd->moni)) {
