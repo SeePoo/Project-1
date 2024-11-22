@@ -365,8 +365,10 @@ static void ssd_init_map_access_count(struct ssd *ssd)
     struct ssdparams *spp = &ssd->sp;
 
     ssd->map_access_count = g_malloc0(sizeof(uint64_t) * spp->tt_pgs);
-    for (int i = 0; i < spp->tt_pgs; i++) {
+    for (uint64_t i = 0; i < spp->tt_pgs; i++) {
+        printf("ssd_init _map access count %ld\r\n", i);
         ssd->map_access_count[i] = 0;
+        printf("ssd_init _map access count %ld\r\n", ssd->map_access_count[i]);
     }
 }
 
@@ -859,8 +861,9 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
             set_rmap_ent(ssd, INVALID_LPN, &ppa);
 
 			/* 원래 있던 데이터를 옮기면 액세스 카운트 증가 */
-			ssd->map_access_count[lpn]++;
+            // printf("write %ld\r\n", lpn);
         }
+        ssd->map_access_count[lpn]++;
 
         /* new write */
         ppa = get_new_page(ssd);
@@ -907,7 +910,7 @@ static void LPN_status(struct ssd *ssd) {
 
 	uint64_t tmp_lpn;
 	uint64_t access_count;
-
+    // printf("tt_pgs %d and mytt_pgs %d\r\n", spp->tt_pgs, spp->nchs * spp->luns_per_ch * spp->pls_per_lun * spp->blks_per_pl * spp->pgs_per_blk);
 	for (blk_idx = 0; blk_idx < spp->blks_per_pl; blk_idx++) {
 		for (pg_idx = 0; pg_idx < spp->pgs_per_blk; pg_idx++) {
 			for (ch_idx = 0; ch_idx < spp->nchs; ch_idx++) {
@@ -917,18 +920,18 @@ static void LPN_status(struct ssd *ssd) {
 					tmp_ppa.g.pl = pl_idx = 0;
 					tmp_ppa.g.blk = blk_idx;
 					tmp_ppa.g.pg = pg_idx;
-					tmp_lpn = get_rmap_ent(ssd, &tmp_ppa);
+					tmp_lpn = ppa2pgidx(ssd, &tmp_ppa);
 					access_count = ssd->map_access_count[tmp_lpn];
-					if (access_count < 1000) {
-						fprintf(ssd_LPN_status, "\033[0;44mC\033[0m ");
-					} else if (access_count < 2000) {
-						fprintf(ssd_LPN_status, "\033[0;46m\033[0m ");
-					} else if (access_count < 3000) {
-						fprintf(ssd_LPN_status, "\033[0;42mM\033[0m ");
-					} else if (access_count < 4000) {
-						fprintf(ssd_LPN_status, "\033[0;43mW\033[0m ");
+					if (access_count < 4) {
+						fprintf(ssd_LPN_status, "\033[0;44m%03ld\033[0m", access_count);
+					} else if (access_count < 8) {
+						fprintf(ssd_LPN_status, "\033[0;46m%03ld\033[0m", access_count);
+					} else if (access_count < 12) {
+						fprintf(ssd_LPN_status, "\033[0;42m%03ld\033[0m", access_count);
+					} else if (access_count < 16) {
+						fprintf(ssd_LPN_status, "\033[0;43m%03ld\033[0m", access_count);
 					} else {
-						fprintf(ssd_LPN_status, "\033[0;41mH\033[0m ");
+						fprintf(ssd_LPN_status, "\033[0;41m%03ld\033[0m", access_count);
 					}
 				}
 			}
@@ -1013,7 +1016,6 @@ static void print_1sec_monitering(struct s_monitering *moni) {
 	(double)(moni->read_throughput + moni->write_throughput) / (double)(1024 * 1024));
 	fflush(moni->throughput);
 
-	moni->prev_time_1sec = moni->curr_time_1sec;
 	moni->read_IO = moni->write_IO = moni->read_throughput = moni->write_throughput = 0;
 }
 
@@ -1031,7 +1033,6 @@ static void print_10sec_monitering(struct s_monitering *moni) {
 	(moni->curr_time_10sec - moni->init_time) / (uint64_t)1e6, moni->gc_erase_block_count);
 	fflush(moni->GC);
 
-	moni->prev_time_10sec = moni->curr_time_10sec;
 	moni->req_size = moni->gc_data_size_for_WAF = moni->gc_erase_block_count = 0;
 }
 
@@ -1088,12 +1089,17 @@ static void *ftl_thread(void *arg)
             ssd->moni.curr_time_1sec = ssd->moni.curr_time_10sec = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
 			/* 측정 시간이 1초가 되면 출력 */
 			if (ssd->moni.curr_time_1sec - ssd->moni.prev_time_1sec >= 1e9) {
-				LPN_status(ssd);
-				print_1sec_monitering(&ssd->moni);
+                if (false)
+				    print_1sec_monitering(&ssd->moni);
+                ssd->moni.prev_time_1sec = ssd->moni.curr_time_1sec;
 			}
 			/* 측정 시간이 10초가 되면 출력 */
-			if (ssd->moni.curr_time_10sec - ssd->moni.prev_time_10sec >= 1e10)
-				print_10sec_monitering(&ssd->moni);
+			if (ssd->moni.curr_time_10sec - ssd->moni.prev_time_10sec >= 1e10) {
+				LPN_status(ssd);
+                ssd->moni.prev_time_10sec = ssd->moni.curr_time_10sec;
+                if (false)
+				    print_10sec_monitering(&ssd->moni);
+            }
 
             req->reqlat = lat;
             req->expire_time += lat;
