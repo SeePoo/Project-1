@@ -231,7 +231,12 @@ struct ssd {
     bool *dataplane_started_ptr;
     QemuThread ftl_thread;
 
+	/* LPN별 접근 횟수 */
+	uint64_t *map_access_count;
+
 	struct s_monitering moni;
+
+	
 };
 
 
