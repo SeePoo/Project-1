@@ -360,6 +360,16 @@ static void ssd_init_rmap(struct ssd *ssd)
     }
 }
 
+static void ssd_init_map_access_count(struct ssd *ssd)
+{
+    struct ssdparams *spp = &ssd->sp;
+
+    ssd->map_access_count = g_malloc0(sizeof(uint64_t) * spp->tt_pgs);
+    for (int i = 0; i < spp->tt_pgs; i++) {
+        ssd->map_access_count[i] = 0;
+    }
+}
+
 void ssd_init(FemuCtrl *n)
 {
     struct ssd *ssd = n->ssd;
@@ -386,6 +396,9 @@ void ssd_init(FemuCtrl *n)
 
     /* initialize write pointer, this is how we allocate new pages for writes */
     ssd_init_write_pointer(ssd);
+
+	/* LPN 접근 횟수 배열 초기화 */
+	ssd_init_map_access_count(ssd);
 
     qemu_thread_create(&ssd->ftl_thread, "FEMU-FTL-Thread", ftl_thread, n,
                        QEMU_THREAD_JOINABLE);
@@ -844,6 +857,9 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
             /* update old page information first */
             mark_page_invalid(ssd, &ppa);
             set_rmap_ent(ssd, INVALID_LPN, &ppa);
+
+			/* 원래 있던 데이터를 옮기면 액세스 카운트 증가 */
+			ssd->map_access_count[lpn]++;
         }
 
         /* new write */
@@ -878,13 +894,10 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     return maxlat;
 }
 
-static void page_status(struct ssd *ssd) {
-    FILE *ssd_page_status = fopen("log_ssd_page_status", "w");
-    struct ssd_channel *chs;
-    struct nand_lun *luns;
-    struct nand_plane *pls;
-    struct nand_block *blks;
-    struct nand_page *pgs;
+static void LPN_status(struct ssd *ssd) {
+    FILE *ssd_LPN_status = fopen("log_LPN_status", "w");
+	struct ssdparams *spp = &ssd->sp;
+	struct ppa tmp_ppa;
 
     int ch_idx;
     int lun_idx;
@@ -892,34 +905,40 @@ static void page_status(struct ssd *ssd) {
     int blk_idx;
     int pg_idx;
 
-    for (ch_idx = 0; ch_idx < ssd->sp.nchs; ch_idx++) {
-        chs = ssd->ch + ch_idx;
-        for (lun_idx = 0; lun_idx < chs->nluns; lun_idx++) {
-            luns = chs->lun + lun_idx;
-            for (pl_idx = 0; pl_idx < luns->npls; pl_idx++) {
-                pls = luns->pl + pl_idx;
-                for (blk_idx = 0; blk_idx < pls->nblks; blk_idx++) {
-                    blks = pls->blk + blk_idx;
-                    for (pg_idx = 0; pg_idx < blks->npgs; pg_idx++) {
-                        pgs = blks->pg + pg_idx;
-                        if (pgs->status == PG_VALID) {
-                            fprintf(ssd_page_status, "\033[0;32mV\033[0;37m ");
-                        } else if (pgs->status == PG_INVALID) {
-                            fprintf(ssd_page_status, "\033[0;31mX\033[0;37m ");
-                        } else if (pgs->status == PG_FREE) {
-                            fprintf(ssd_page_status, "\033[0;34mF\033[0;37m ");
-                        } else {
-                            fprintf(ssd_page_status, "  ");
-                        }
-                    }
-                    fprintf(ssd_page_status, "\n");
-                }
-            }
-            fprintf(ssd_page_status, "\n");
-        }
-    }
-    fflush(ssd_page_status);
-    fclose(ssd_page_status);
+	uint64_t tmp_lpn;
+	uint64_t access_count;
+
+	for (lun_idx = 0; lun_idx < spp->luns_per_ch; lun_idx++) {
+		for (ch_idx = 0; ch_idx < spp->nchs; ch_idx++) {
+			for (pg_idx = 0; pg_idx < spp->pgs_per_blk; pg_idx++) {
+				for (blk_idx = 0; blk_idx < spp->blks_per_pl; blk_idx++) {
+					for (pl_idx = 0; pl_idx < spp->pls_per_lun; pl_idx++) {
+						tmp_ppa.g.ch = ch_idx;
+						tmp_ppa.g.lun = lun_idx;
+						tmp_ppa.g.pl = pl_idx;
+						tmp_ppa.g.blk = blk_idx;
+						tmp_ppa.g.pg = pg_idx;
+						tmp_lpn = get_rmap_ent(ssd, tmp_ppa);
+						access_count = ssd->map_access_count[tmp_lpn];
+						if (access_count < 100) {
+							fprintf(ssd_LPN_status, "\033[0;44mC\033[0;44m ");
+						} else if (access_count < 200) {
+							fprintf(ssd_LPN_status, "\033[0;46mC\033[0;46m ");
+						} else if (access_count < 300) {
+							fprintf(ssd_LPN_status, "\033[0;42mC\033[0;42m ");
+						} else if (access_count < 400) {
+							fprintf(ssd_LPN_status, "\033[0;43mC\033[0;43m ");
+						} else {
+							fprintf(ssd_LPN_status, "\033[0;41mC\033[0;41m ");
+						}
+					}
+				}
+			}
+		}
+	}
+
+    fflush(ssd_LPN_status);
+    fclose(ssd_LPN_status);
 }
 
 static int monitering_init(struct s_monitering *moni) {
@@ -1053,8 +1072,10 @@ static void *ftl_thread(void *arg)
 			/* 매 순간 측정 이후 모니터링값 출력. */
             ssd->moni.curr_time_1sec = ssd->moni.curr_time_10sec = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
 			/* 측정 시간이 1초가 되면 출력 */
-			if (ssd->moni.curr_time_1sec - ssd->moni.prev_time_1sec >= 1e9)
+			if (ssd->moni.curr_time_1sec - ssd->moni.prev_time_1sec >= 1e9) {
+				LPN_status(ssd);
 				print_1sec_monitering(&ssd->moni);
+			}
 			/* 측정 시간이 10초가 되면 출력 */
 			if (ssd->moni.curr_time_10sec - ssd->moni.prev_time_10sec >= 1e10)
 				print_10sec_monitering(&ssd->moni);
