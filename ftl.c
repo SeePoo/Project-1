@@ -360,18 +360,6 @@ static void ssd_init_rmap(struct ssd *ssd)
     }
 }
 
-static void ssd_init_map_access_count(struct ssd *ssd)
-{
-    struct ssdparams *spp = &ssd->sp;
-
-    ssd->map_access_count = g_malloc0(sizeof(uint64_t) * spp->tt_pgs);
-    for (uint64_t i = 0; i < spp->tt_pgs; i++) {
-        printf("ssd_init _map access count %ld\r\n", i);
-        ssd->map_access_count[i] = 0;
-        printf("ssd_init _map access count %ld\r\n", ssd->map_access_count[i]);
-    }
-}
-
 void ssd_init(FemuCtrl *n)
 {
     struct ssd *ssd = n->ssd;
@@ -398,9 +386,6 @@ void ssd_init(FemuCtrl *n)
 
     /* initialize write pointer, this is how we allocate new pages for writes */
     ssd_init_write_pointer(ssd);
-
-	/* LPN 접근 횟수 배열 초기화 */
-	ssd_init_map_access_count(ssd);
 
     qemu_thread_create(&ssd->ftl_thread, "FEMU-FTL-Thread", ftl_thread, n,
                        QEMU_THREAD_JOINABLE);
@@ -859,11 +844,8 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
             /* update old page information first */
             mark_page_invalid(ssd, &ppa);
             set_rmap_ent(ssd, INVALID_LPN, &ppa);
-
-			/* 원래 있던 데이터를 옮기면 액세스 카운트 증가 */
-            // printf("write %ld\r\n", lpn);
         }
-        ssd->map_access_count[lpn]++;
+        ssd->moni.map_access_count[lpn]++;
 
         /* new write */
         ppa = get_new_page(ssd);
@@ -921,7 +903,7 @@ static void LPN_status(struct ssd *ssd) {
 					tmp_ppa.g.blk = blk_idx;
 					tmp_ppa.g.pg = pg_idx;
 					tmp_lpn = ppa2pgidx(ssd, &tmp_ppa);
-					access_count = ssd->map_access_count[tmp_lpn];
+					access_count = ssd->moni.map_access_count[tmp_lpn];
 					if (access_count < 4) {
 						fprintf(ssd_LPN_status, "\033[0;44m%03ld\033[0m", access_count);
 					} else if (access_count < 8) {
@@ -960,7 +942,19 @@ static void LPN_status(struct ssd *ssd) {
     fclose(ssd_LPN_status);
 }
 
-static int monitering_init(struct s_monitering *moni) {
+static void ssd_init_map_access_count(struct ssd *ssd)
+{
+    struct ssdparams *spp = &ssd->sp;
+
+    ssd->moni.map_access_count = g_malloc0(sizeof(uint64_t) * spp->tt_pgs);
+    for (uint64_t i = 0; i < spp->tt_pgs; i++) {
+        ssd->moni.map_access_count[i] = 0;
+    }
+}
+
+static int monitering_init(struct ssd *ssd) {
+    struct s_monitering *moni = &ssd->moni;
+
     moni->IOPS = fopen("log_IOPS", "w+");
 	if (moni->IOPS == NULL) {
 		perror("fopen(\"log_IOPS\", \"w+\")");
@@ -987,15 +981,28 @@ static int monitering_init(struct s_monitering *moni) {
 		perror("fopen(\"log_WAF\", \"w+\")");
 		return 4;
 	}
+    moni->CDF = fopen("log_CDF", "w+");
+	if (moni->CDF == NULL) {
+		free(moni->IOPS);
+		free(moni->throughput);
+		free(moni->GC);
+		free(moni->WAF);
+		perror("fopen(\"log_CDF\", \"w+\")");
+		return 4;
+	}
 
 	moni->read_IO = 0;
 	moni->write_IO = 0;
     moni->read_throughput = 0;
 	moni->write_throughput = 0;
-    moni->req_size = 0;
 
 	moni->gc_erase_block_count = 0;
+
 	moni->gc_data_size_for_WAF = 0;
+    moni->req_size = 0;
+
+	/* LPN 접근 횟수 배열 초기화 */
+	ssd_init_map_access_count(ssd);
 
 	moni->init_time = \
 	moni->curr_time_1sec = \
@@ -1036,6 +1043,29 @@ static void print_10sec_monitering(struct s_monitering *moni) {
 	moni->req_size = moni->gc_data_size_for_WAF = moni->gc_erase_block_count = 0;
 }
 
+static void print_CDF(struct ssd *ssd) {
+    uint64_t max_access_count = 0;
+    uint64_t count_per_access_count[10000];
+    
+    for (int i = 0; i < 10000; i++) {
+        count_per_access_count[i] = 0;
+    }
+    /* 최대 LPN access count 구하기 */
+    for (int i = 0; i < ssd->sp.tt_pgs; i++) {
+        if (max_access_count < ssd->moni.map_access_count[i]) {
+            max_access_count = ssd->moni.map_access_count[i];
+        }
+    }
+    /* 배열에 각 access count를 가지는 lpn 갯수 구하기 */
+    for (int i = 0; i < ssd->sp.tt_pgs; i++) {
+        count_per_access_count[ssd->moni.map_access_count[i]]++;
+    }
+    for (int i = 0; i < max_access_count + 5; i++) {
+        fprintf(ssd->moni.CDF ,"%10d %10ld\n", i, count_per_access_count[i]);
+    }
+    fflush(ssd->moni.CDF);
+}
+
 static void *ftl_thread(void *arg)
 {
     FemuCtrl *n = (FemuCtrl *)arg;
@@ -1050,7 +1080,7 @@ static void *ftl_thread(void *arg)
     }
 
 	/* 모니터링 변수 초기화. */
-	if (monitering_init(&ssd->moni)) {
+	if (monitering_init(ssd)) {
 		ftl_err("monitering init ERROR\n");
 		return NULL;
 	}
@@ -1083,6 +1113,12 @@ static void *ftl_thread(void *arg)
             default:
                 //ftl_err("FTL received unkown request type, ERROR\n");
                 ;
+            }
+
+            /* opcode CDF_TRIGGER_OPCODE를 가지는 명령어가 들어오면 실행 */
+            if (req->cmd.opcode == CDF_TRIGGER_OPCODE) { 
+                print_CDF(ssd);
+                printf("triggered CDF\r\n");
             }
 
 			/* 매 순간 측정 이후 모니터링값 출력. */
