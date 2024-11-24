@@ -455,6 +455,14 @@ static uint16_t nvme_io_cmd(FemuCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
             return nvme_write_uncor(n, ns, cmd, req);
         }
         return NVME_INVALID_OPCODE | NVME_DNR;
+    /* 0xC0 명령 처리 추가 */
+    case CDF_TRIGGER_OPCODE:
+        femu_log("%s: Received custom opcode 0xC0, no action performed\n", __func__);
+        // FTL로 전달 (여기서 아무 동작도 하지 않음)
+        if (n->ext_ops.io_cmd) {
+            n->ext_ops.io_cmd(n, ns, cmd, req);
+        }
+        return NVME_SUCCESS; // 성공 반환
     default:
         if (n->ext_ops.io_cmd) {
             return n->ext_ops.io_cmd(n, ns, cmd, req);
