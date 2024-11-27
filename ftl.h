@@ -7,6 +7,13 @@
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
 
+#define IOPS_FLAG			1
+#define THROUGHPUT_FLAG		2
+#define WAF_FLAG			4
+#define GC_FLAG				8
+#define MAX_ACCESS_COUNT	10000
+
+
 enum {
     NAND_READ =  0,
     NAND_WRITE = 1,
@@ -243,6 +250,8 @@ struct ssd {
     bool *dataplane_started_ptr;
     QemuThread ftl_thread;
 
+    struct write_pointer wp_for_hot;
+    struct write_pointer wp_for_cold;
     /* 모니터링 용 구조체 변수 */
 	struct s_monitering moni;
 };
