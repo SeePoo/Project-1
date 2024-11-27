@@ -208,6 +208,62 @@ static void ssd_advance_write_pointer(struct ssd *ssd)
     }
 }
 
+/**
+ * wpp: 이동할 라인 지정
+ * */
+static void ssd_advance_write_pointer(struct ssd *ssd, struct write_pointer *wpp)
+{
+    struct ssdparams *spp = &ssd->sp;
+    struct line_mgmt *lm = &ssd->lm;
+
+    check_addr(wpp->ch, spp->nchs);
+    wpp->ch++;
+    if (wpp->ch == spp->nchs) {
+        wpp->ch = 0;
+        check_addr(wpp->lun, spp->luns_per_ch);
+        wpp->lun++;
+        /* in this case, we should go to next lun */
+        if (wpp->lun == spp->luns_per_ch) {
+            wpp->lun = 0;
+            /* go to next page in the block */
+            check_addr(wpp->pg, spp->pgs_per_blk);
+            wpp->pg++;
+            if (wpp->pg == spp->pgs_per_blk) {
+                wpp->pg = 0;
+                /* move current line to {victim,full} line list */
+                if (wpp->curline->vpc == spp->pgs_per_line) {
+                    /* all pgs are still valid, move to full line list */
+                    ftl_assert(wpp->curline->ipc == 0);
+                    QTAILQ_INSERT_TAIL(&lm->full_line_list, wpp->curline, entry);
+                    lm->full_line_cnt++;
+                } else {
+                    ftl_assert(wpp->curline->vpc >= 0 && wpp->curline->vpc < spp->pgs_per_line);
+                    /* there must be some invalid pages in this line */
+                    ftl_assert(wpp->curline->ipc > 0);
+                    pqueue_insert(lm->victim_line_pq, wpp->curline);
+                    lm->victim_line_cnt++;
+                }
+                /* current line is used up, pick another empty line */
+                check_addr(wpp->blk, spp->blks_per_pl);
+                wpp->curline = NULL;
+                wpp->curline = get_next_free_line(ssd);
+                if (!wpp->curline) {
+                    /* TODO */
+                    abort();
+                }
+                wpp->blk = wpp->curline->id;
+                check_addr(wpp->blk, spp->blks_per_pl);
+                /* make sure we are starting from page 0 in the super block */
+                ftl_assert(wpp->pg == 0);
+                ftl_assert(wpp->lun == 0);
+                ftl_assert(wpp->ch == 0);
+                /* TODO: assume # of pl_per_lun is 1, fix later */
+                ftl_assert(wpp->pl == 0);
+            }
+        }
+    }
+}
+
 static struct ppa get_new_page(struct ssd *ssd)
 {
     struct write_pointer *wpp = &ssd->wp;
@@ -868,7 +924,6 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         maxlat = (curlat > maxlat) ? curlat : maxlat;
     }
 
-
 	/* nlb = 쓰는 섹터 수  */
 	/* secsz = 섹터의 크기 */
 	/* 페이지 개수는 어떻게? */
@@ -942,6 +997,10 @@ static void LPN_status(struct ssd *ssd) {
     fclose(ssd_LPN_status);
 }
 
+/****************************
+ * MONITERING INIT FUNTIONS *
+ ****************************/
+
 static void ssd_init_map_access_count(struct ssd *ssd)
 {
     struct ssdparams *spp = &ssd->sp;
@@ -1013,41 +1072,83 @@ static int monitering_init(struct ssd *ssd) {
 	return 0;
 }
 
-static void print_1sec_monitering(struct s_monitering *moni) {
-	fprintf(moni->IOPS, "%10ld %10ld\n", \
-	(moni->curr_time_1sec - moni->init_time) / (uint64_t)1e6, moni->read_IO + moni->write_IO);
-	fflush(moni->IOPS);
+/************************
+ * DATA PRINT FUNCTIONS *
+ ************************/
 
-	fprintf(moni->throughput, "%10ld %10lf\n", \
-	(moni->curr_time_1sec - moni->init_time) / (uint64_t)1e6, \
-	(double)(moni->read_throughput + moni->write_throughput) / (double)(1024 * 1024));
-	fflush(moni->throughput);
+/* 1초간의 IOPS를 출력하는 함수 */
+static void print_IOPS(struct s_monitering *moni, int time) {
+	uint64_t curr_time;
+	uint64_t IOPS_value = moni->read_IO + moni->write_IO;
 
-	moni->read_IO = moni->write_IO = moni->read_throughput = moni->write_throughput = 0;
-}
-
-static void print_10sec_monitering(struct s_monitering *moni) {
-	if (moni->req_size != 0) {
-		fprintf(moni->WAF, "%10ld %10lf\n", \
-		(moni->curr_time_10sec - moni->init_time) / (uint64_t)1e6, (double)(moni->req_size + moni->gc_data_size_for_WAF) / (double)(moni->req_size));
-	} else {
-		fprintf(moni->WAF, "%10ld none I/O\n", \
-		(moni->curr_time_10sec - moni->init_time) / (uint64_t)1e6);
+	if (time == 1) {
+		curr_time = (moni->curr_time_1sec - moni->init_time) / (uint64_t)1e6;
+	} else if (time == 10) {
+		curr_time = (moni->curr_time_10sec - moni->init_time) / (uint64_t)1e6;
 	}
-	fflush(moni->WAF);
 
-	fprintf(moni->GC, "%10ld %10ld\n", \
-	(moni->curr_time_10sec - moni->init_time) / (uint64_t)1e6, moni->gc_erase_block_count);
-	fflush(moni->GC);
-
-	moni->req_size = moni->gc_data_size_for_WAF = moni->gc_erase_block_count = 0;
+	fprintf(moni->IOPS, "%10ld %10ld\n", curr_time, IOPS_value);
+	fflush(moni->IOPS);
+	moni->read_IO = moni->write_IO = 0;
 }
 
+/* 1초간의 throughput를 출력하는 함수 */
+static void print_throughput(struct s_monitering *moni, int time) {
+	uint64_t curr_time = 0;
+	double throughput_value = (double)(moni->read_throughput + moni->write_throughput) / (double)(1024 * 1024);
+
+	if (time == 1) {
+		curr_time = (moni->curr_time_1sec - moni->init_time) / (uint64_t)1e6;
+	} else if (time == 10) {
+		curr_time = (moni->curr_time_10sec - moni->init_time) / (uint64_t)1e6;
+	}
+
+	fprintf(moni->throughput, "%10ld %10lf\n", curr_time, throughput_value);
+	fflush(moni->throughput);
+	moni->read_throughput = moni->write_throughput = 0;
+}
+
+/* 10초간의 WAF를 출력하는 함수 */
+static void print_WAF(struct s_monitering *moni, int time) {
+	uint64_t curr_time = 0;
+	double WAF_value = (double)(moni->req_size + moni->gc_data_size_for_WAF);
+
+	if (time == 1) {
+		curr_time = (moni->curr_time_1sec - moni->init_time) / (uint64_t)1e6;
+	} else if (time == 10) {
+		curr_time = (moni->curr_time_10sec - moni->init_time) / (uint64_t)1e6;
+	}
+	if (moni->req_size != 0) {
+		WAF_value /= (double)moni->req_size;
+	} else {
+		WAF_value = 0;
+	}
+	fprintf(moni->WAF, "%10ld %10lf\n", curr_time, WAF_value);
+	fflush(moni->WAF);
+	moni->req_size = moni->gc_data_size_for_WAF = 0;
+}
+
+/* 10초간의 GC로 지워지는 블록 수를 출력하는 함수 */
+static void print_GC(struct s_monitering *moni, int time) {
+	uint64_t curr_time = 0;
+	uint64_t GC_value = moni->gc_erase_block_count;
+	
+	if (time == 1) {
+		curr_time = (moni->curr_time_1sec - moni->init_time) / (uint64_t)1e6;
+	} else if (time == 10) {
+		curr_time = (moni->curr_time_10sec - moni->init_time) / (uint64_t)1e6;
+	}
+	fprintf(moni->GC, "%10ld %10ld\n", curr_time, GC_value);
+	fflush(moni->GC);
+	moni->gc_erase_block_count = 0;
+}
+
+/* 접근횟수 별 LPN 개수를 출력하는 함수  */
 static void print_CDF(struct ssd *ssd) {
     uint64_t max_access_count = 0;
-    uint64_t count_per_access_count[10000];
+    uint64_t count_per_access_count[MAX_ACCESS_COUNT];
     
-    for (int i = 0; i < 10000; i++) {
+    for (int i = 0; i < MAX_ACCESS_COUNT; i++) {
         count_per_access_count[i] = 0;
     }
     /* 최대 LPN access count 구하기 */
@@ -1064,6 +1165,30 @@ static void print_CDF(struct ssd *ssd) {
         fprintf(ssd->moni.CDF ,"%10d %10ld\n", i, count_per_access_count[i]);
     }
     fflush(ssd->moni.CDF);
+}
+
+/* 1초 모니터링에서 출력할 데이터들 */
+static void print_1sec_monitering(struct s_monitering *moni, int print_flag) {
+	if (print_flag & IOPS_FLAG)
+		print_IOPS(moni, 1);
+	if (print_flag & THROUGHPUT_FLAG)
+		print_throughput(moni, 1);
+	if (print_flag & WAF_FLAG)
+		print_WAF(moni, 1);
+	if (print_flag & GC_FLAG)
+		print_GC(moni, 1);
+}
+
+/* 10초 모니터링에서 출력할 데이터들 */
+static void print_10sec_monitering(struct s_monitering *moni, int print_flag) {
+	if (print_flag & IOPS_FLAG)
+		print_IOPS(moni, 10);
+	if (print_flag & THROUGHPUT_FLAG)
+		print_throughput(moni, 10);
+	if (print_flag & WAF_FLAG)
+		print_WAF(moni, 10);
+	if (print_flag & GC_FLAG)
+		print_GC(moni, 10);
 }
 
 static void *ftl_thread(void *arg)
@@ -1118,23 +1243,20 @@ static void *ftl_thread(void *arg)
             /* opcode CDF_TRIGGER_OPCODE를 가지는 명령어가 들어오면 실행 */
             if (req->cmd.opcode == CDF_TRIGGER_OPCODE) { 
                 print_CDF(ssd);
-                printf("triggered CDF\r\n");
             }
 
 			/* 매 순간 측정 이후 모니터링값 출력. */
             ssd->moni.curr_time_1sec = ssd->moni.curr_time_10sec = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+
 			/* 측정 시간이 1초가 되면 출력 */
 			if (ssd->moni.curr_time_1sec - ssd->moni.prev_time_1sec >= 1e9) {
-                if (false)
-				    print_1sec_monitering(&ssd->moni);
+				print_1sec_monitering(&ssd->moni, IOPS_FLAG);
                 ssd->moni.prev_time_1sec = ssd->moni.curr_time_1sec;
 			}
 			/* 측정 시간이 10초가 되면 출력 */
 			if (ssd->moni.curr_time_10sec - ssd->moni.prev_time_10sec >= 1e10) {
-				LPN_status(ssd);
+				print_10sec_monitering(&ssd->moni, WAF_FLAG);
                 ssd->moni.prev_time_10sec = ssd->moni.curr_time_10sec;
-                if (false)
-				    print_10sec_monitering(&ssd->moni);
             }
 
             req->reqlat = lat;
