@@ -211,59 +211,58 @@ static void ssd_advance_write_pointer(struct ssd *ssd)
 /**
  * wpp: 이동할 라인 지정
  * */
-static void ssd_advance_write_pointer(struct ssd *ssd, struct write_pointer *wpp)
-{
-    struct ssdparams *spp = &ssd->sp;
-    struct line_mgmt *lm = &ssd->lm;
+// static void ssd_advance_write_pointer(struct ssd *ssd, struct write_pointer *wpp)
+// {
+//     struct ssdparams *spp = &ssd->sp;
+//     struct line_mgmt *lm = &ssd->lm;
 
-    check_addr(wpp->ch, spp->nchs);
-    wpp->ch++;
-    if (wpp->ch == spp->nchs) {
-        wpp->ch = 0;
-        check_addr(wpp->lun, spp->luns_per_ch);
-        wpp->lun++;
-        /* in this case, we should go to next lun */
-        if (wpp->lun == spp->luns_per_ch) {
-            wpp->lun = 0;
-            /* go to next page in the block */
-            check_addr(wpp->pg, spp->pgs_per_blk);
-            wpp->pg++;
-            if (wpp->pg == spp->pgs_per_blk) {
-                wpp->pg = 0;
-                /* move current line to {victim,full} line list */
-                if (wpp->curline->vpc == spp->pgs_per_line) {
-                    /* all pgs are still valid, move to full line list */
-                    ftl_assert(wpp->curline->ipc == 0);
-                    QTAILQ_INSERT_TAIL(&lm->full_line_list, wpp->curline, entry);
-                    lm->full_line_cnt++;
-                } else {
-                    ftl_assert(wpp->curline->vpc >= 0 && wpp->curline->vpc < spp->pgs_per_line);
-                    /* there must be some invalid pages in this line */
-                    ftl_assert(wpp->curline->ipc > 0);
-                    pqueue_insert(lm->victim_line_pq, wpp->curline);
-                    lm->victim_line_cnt++;
-                }
-                /* current line is used up, pick another empty line */
-                check_addr(wpp->blk, spp->blks_per_pl);
-                wpp->curline = NULL;
-                wpp->curline = get_next_free_line(ssd);
-                if (!wpp->curline) {
-                    /* TODO */
-                    abort();
-                }
-                wpp->blk = wpp->curline->id;
-                check_addr(wpp->blk, spp->blks_per_pl);
-                /* make sure we are starting from page 0 in the super block */
-                ftl_assert(wpp->pg == 0);
-                ftl_assert(wpp->lun == 0);
-                ftl_assert(wpp->ch == 0);
-                /* TODO: assume # of pl_per_lun is 1, fix later */
-                ftl_assert(wpp->pl == 0);
-            }
-        }
-    }
-}
-
+//     check_addr(wpp->ch, spp->nchs);
+//     wpp->ch++;
+//     if (wpp->ch == spp->nchs) {
+//         wpp->ch = 0;
+//         check_addr(wpp->lun, spp->luns_per_ch);
+//         wpp->lun++;
+//         /* in this case, we should go to next lun */
+//         if (wpp->lun == spp->luns_per_ch) {
+//             wpp->lun = 0;
+//             /* go to next page in the block */
+//             check_addr(wpp->pg, spp->pgs_per_blk);
+//             wpp->pg++;
+//             if (wpp->pg == spp->pgs_per_blk) {
+//                 wpp->pg = 0;
+//                 /* move current line to {victim,full} line list */
+//                 if (wpp->curline->vpc == spp->pgs_per_line) {
+//                     /* all pgs are still valid, move to full line list */
+//                     ftl_assert(wpp->curline->ipc == 0);
+//                     QTAILQ_INSERT_TAIL(&lm->full_line_list, wpp->curline, entry);
+//                     lm->full_line_cnt++;
+//                 } else {
+//                     ftl_assert(wpp->curline->vpc >= 0 && wpp->curline->vpc < spp->pgs_per_line);
+//                     /* there must be some invalid pages in this line */
+//                     ftl_assert(wpp->curline->ipc > 0);
+//                     pqueue_insert(lm->victim_line_pq, wpp->curline);
+//                     lm->victim_line_cnt++;
+//                 }
+//                 /* current line is used up, pick another empty line */
+//                 check_addr(wpp->blk, spp->blks_per_pl);
+//                 wpp->curline = NULL;
+//                 wpp->curline = get_next_free_line(ssd);
+//                 if (!wpp->curline) {
+//                     /* TODO */
+//                     abort();
+//                 }
+//                 wpp->blk = wpp->curline->id;
+//                 check_addr(wpp->blk, spp->blks_per_pl);
+//                 /* make sure we are starting from page 0 in the super block */
+//                 ftl_assert(wpp->pg == 0);
+//                 ftl_assert(wpp->lun == 0);
+//                 ftl_assert(wpp->ch == 0);
+//                 /* TODO: assume # of pl_per_lun is 1, fix later */
+//                 ftl_assert(wpp->pl == 0);
+//             }
+//         }
+//     }
+// }
 
 /* 고칠거 */
 static struct ppa get_new_page(struct ssd *ssd)
@@ -937,68 +936,68 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     return maxlat;
 }
 
-static void LPN_status(struct ssd *ssd) {
-    FILE *ssd_LPN_status = fopen("log_LPN_status", "w");
-    struct ssdparams *spp = &ssd->sp;
-    struct ppa tmp_ppa;
+// static void LPN_status(struct ssd *ssd) {
+//     FILE *ssd_LPN_status = fopen("log_LPN_status", "w");
+//     struct ssdparams *spp = &ssd->sp;
+//     struct ppa tmp_ppa;
 
-    int ch_idx;
-    int lun_idx;
-    int pl_idx;
-    int blk_idx;
-    int pg_idx;
+//     int ch_idx;
+//     int lun_idx;
+//     int pl_idx;
+//     int blk_idx;
+//     int pg_idx;
 
-    uint64_t tmp_lpn;
-    uint64_t access_count;
-    // printf("tt_pgs %d and mytt_pgs %d\r\n", spp->tt_pgs, spp->nchs * spp->luns_per_ch * spp->pls_per_lun * spp->blks_per_pl * spp->pgs_per_blk);
-    for (blk_idx = 0; blk_idx < spp->blks_per_pl; blk_idx++) {
-        for (pg_idx = 0; pg_idx < spp->pgs_per_blk; pg_idx++) {
-            for (ch_idx = 0; ch_idx < spp->nchs; ch_idx++) {
-                for (lun_idx = 0; lun_idx < spp->luns_per_ch; lun_idx++) {
-                    tmp_ppa.g.ch = ch_idx;
-                    tmp_ppa.g.lun = lun_idx;
-                    tmp_ppa.g.pl = pl_idx = 0;
-                    tmp_ppa.g.blk = blk_idx;
-                    tmp_ppa.g.pg = pg_idx;
-                    tmp_lpn = ppa2pgidx(ssd, &tmp_ppa);
-                    access_count = ssd->moni.map_access_count[tmp_lpn];
-                    if (access_count < 4) {
-                        fprintf(ssd_LPN_status, "\033[0;44m%03ld\033[0m", access_count);
-                    } else if (access_count < 8) {
-                        fprintf(ssd_LPN_status, "\033[0;46m%03ld\033[0m", access_count);
-                    } else if (access_count < 12) {
-                        fprintf(ssd_LPN_status, "\033[0;42m%03ld\033[0m", access_count);
-                    } else if (access_count < 16) {
-                        fprintf(ssd_LPN_status, "\033[0;43m%03ld\033[0m", access_count);
-                    } else {
-                        fprintf(ssd_LPN_status, "\033[0;41m%03ld\033[0m", access_count);
-                    }
-                }
-            }
-        }
-        fprintf(ssd_LPN_status, "\n\n");
-    }
-    /*
-    3	4	f	1	2
-    ch	lun	pl	bl	pg
-    0	0	0	0	0
-    0	1	0	0	0
-    1	0	0	0	0
-    1	1	0	0	0
-    2	0	0	0	0
-    2	1	0	0	0
-    3	0	0	0	0
-    3	1	0	0	0
-    0	0	0	0	1
-    .
-    .
-    .
-    0	0	0	1	0
-    */
+//     uint64_t tmp_lpn;
+//     uint64_t access_count;
+//     // printf("tt_pgs %d and mytt_pgs %d\r\n", spp->tt_pgs, spp->nchs * spp->luns_per_ch * spp->pls_per_lun * spp->blks_per_pl * spp->pgs_per_blk);
+//     for (blk_idx = 0; blk_idx < spp->blks_per_pl; blk_idx++) {
+//         for (pg_idx = 0; pg_idx < spp->pgs_per_blk; pg_idx++) {
+//             for (ch_idx = 0; ch_idx < spp->nchs; ch_idx++) {
+//                 for (lun_idx = 0; lun_idx < spp->luns_per_ch; lun_idx++) {
+//                     tmp_ppa.g.ch = ch_idx;
+//                     tmp_ppa.g.lun = lun_idx;
+//                     tmp_ppa.g.pl = pl_idx = 0;
+//                     tmp_ppa.g.blk = blk_idx;
+//                     tmp_ppa.g.pg = pg_idx;
+//                     tmp_lpn = ppa2pgidx(ssd, &tmp_ppa);
+//                     access_count = ssd->moni.map_access_count[tmp_lpn];
+//                     if (access_count < 4) {
+//                         fprintf(ssd_LPN_status, "\033[0;44m%03ld\033[0m", access_count);
+//                     } else if (access_count < 8) {
+//                         fprintf(ssd_LPN_status, "\033[0;46m%03ld\033[0m", access_count);
+//                     } else if (access_count < 12) {
+//                         fprintf(ssd_LPN_status, "\033[0;42m%03ld\033[0m", access_count);
+//                     } else if (access_count < 16) {
+//                         fprintf(ssd_LPN_status, "\033[0;43m%03ld\033[0m", access_count);
+//                     } else {
+//                         fprintf(ssd_LPN_status, "\033[0;41m%03ld\033[0m", access_count);
+//                     }
+//                 }
+//             }
+//         }
+//         fprintf(ssd_LPN_status, "\n\n");
+//     }
+//     /*
+//     3	4	f	1	2
+//     ch	lun	pl	bl	pg
+//     0	0	0	0	0
+//     0	1	0	0	0
+//     1	0	0	0	0
+//     1	1	0	0	0
+//     2	0	0	0	0
+//     2	1	0	0	0
+//     3	0	0	0	0
+//     3	1	0	0	0
+//     0	0	0	0	1
+//     .
+//     .
+//     .
+//     0	0	0	1	0
+//     */
 
-    fflush(ssd_LPN_status);
-    fclose(ssd_LPN_status);
-}
+//     fflush(ssd_LPN_status);
+//     fclose(ssd_LPN_status);
+// }
 
 /****************************
  * MONITERING INIT FUNTIONS *
@@ -1052,6 +1051,11 @@ static int monitering_init(struct ssd *ssd) {
         perror("fopen(\"log_CDF\", \"w+\")");
         return 4;
     }
+    fprintf(moni->IOPS, "time\tvalue\n");
+    fprintf(moni->throughput, "time\tvalue\n");
+    fprintf(moni->GC, "time\tvalue\n");
+    fprintf(moni->WAF, "time\tvalue\n");
+    fprintf(moni->CDF, "access_count\tvalue\n");
 
     moni->read_IO = 0;
     moni->write_IO = 0;
@@ -1253,6 +1257,7 @@ static void *ftl_thread(void *arg)
 
             /* 측정 시간이 1초가 되면 출력 */
             if (ssd->moni.curr_time_1sec - ssd->moni.prev_time_1sec >= 1e9) {
+                print_1sec_monitering(&ssd->moni, 0);
                 ssd->moni.prev_time_1sec = ssd->moni.curr_time_1sec;
             }
             /* 측정 시간이 10초가 되면 출력 */
