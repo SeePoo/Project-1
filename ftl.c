@@ -4,6 +4,10 @@
 
 static void *ftl_thread(void *arg);
 
+static bool is_cold_page(struct ssd *ssd, uint64_t lpn) {
+    return ssd->moni.map_access_count[lpn] < THRESHOLD;
+}
+
 static inline bool should_gc(struct ssd *ssd)
 {
     return (ssd->lm.free_line_cnt <= ssd->sp.gc_thres_lines);
@@ -114,9 +118,30 @@ static void ssd_init_lines(struct ssd *ssd)
     lm->full_line_cnt = 0;
 }
 
-static void ssd_init_write_pointer(struct ssd *ssd)
+// static void ssd_init_write_pointer(struct ssd *ssd)
+// {
+//     struct write_pointer *wpp = &ssd->wp;
+//     struct line_mgmt *lm = &ssd->lm;
+//     struct line *curline = NULL;
+
+//     curline = QTAILQ_FIRST(&lm->free_line_list);
+//     QTAILQ_REMOVE(&lm->free_line_list, curline, entry);
+//     lm->free_line_cnt--;
+
+//     /* wpp->curline is always our next-to-write super-block */
+//     wpp->curline = curline;
+//     wpp->ch = 0;
+//     wpp->lun = 0;
+//     wpp->pg = 0;
+//     wpp->blk = 0;
+//     wpp->pl = 0;
+// }
+
+/**
+ * wpp 초기화 할 wpp
+ */
+static void ssd_init_write_pointer(struct ssd *ssd, struct write_pointer *wpp)
 {
-    struct write_pointer *wpp = &ssd->wp;
     struct line_mgmt *lm = &ssd->lm;
     struct line *curline = NULL;
 
@@ -154,66 +179,10 @@ static struct line *get_next_free_line(struct ssd *ssd)
     return curline;
 }
 
-static void ssd_advance_write_pointer(struct ssd *ssd)
-{
-    struct ssdparams *spp = &ssd->sp;
-    struct write_pointer *wpp = &ssd->wp;
-    struct line_mgmt *lm = &ssd->lm;
-
-    check_addr(wpp->ch, spp->nchs);
-    wpp->ch++;
-    if (wpp->ch == spp->nchs) {
-        wpp->ch = 0;
-        check_addr(wpp->lun, spp->luns_per_ch);
-        wpp->lun++;
-        /* in this case, we should go to next lun */
-        if (wpp->lun == spp->luns_per_ch) {
-            wpp->lun = 0;
-            /* go to next page in the block */
-            check_addr(wpp->pg, spp->pgs_per_blk);
-            wpp->pg++;
-            if (wpp->pg == spp->pgs_per_blk) {
-                wpp->pg = 0;
-                /* move current line to {victim,full} line list */
-                if (wpp->curline->vpc == spp->pgs_per_line) {
-                    /* all pgs are still valid, move to full line list */
-                    ftl_assert(wpp->curline->ipc == 0);
-                    QTAILQ_INSERT_TAIL(&lm->full_line_list, wpp->curline, entry);
-                    lm->full_line_cnt++;
-                } else {
-                    ftl_assert(wpp->curline->vpc >= 0 && wpp->curline->vpc < spp->pgs_per_line);
-                    /* there must be some invalid pages in this line */
-                    ftl_assert(wpp->curline->ipc > 0);
-                    pqueue_insert(lm->victim_line_pq, wpp->curline);
-                    lm->victim_line_cnt++;
-                }
-                /* current line is used up, pick another empty line */
-                check_addr(wpp->blk, spp->blks_per_pl);
-                wpp->curline = NULL;
-                wpp->curline = get_next_free_line(ssd);
-                if (!wpp->curline) {
-                    /* TODO */
-                    abort();
-                }
-                wpp->blk = wpp->curline->id;
-                check_addr(wpp->blk, spp->blks_per_pl);
-                /* make sure we are starting from page 0 in the super block */
-                ftl_assert(wpp->pg == 0);
-                ftl_assert(wpp->lun == 0);
-                ftl_assert(wpp->ch == 0);
-                /* TODO: assume # of pl_per_lun is 1, fix later */
-                ftl_assert(wpp->pl == 0);
-            }
-        }
-    }
-}
-
-/**
- * wpp: 이동할 라인 지정
- * */
-// static void ssd_advance_write_pointer(struct ssd *ssd, struct write_pointer *wpp)
+// static void ssd_advance_write_pointer(struct ssd *ssd)
 // {
 //     struct ssdparams *spp = &ssd->sp;
+//     struct write_pointer *wpp = &ssd->wp;
 //     struct line_mgmt *lm = &ssd->lm;
 
 //     check_addr(wpp->ch, spp->nchs);
@@ -264,10 +233,84 @@ static void ssd_advance_write_pointer(struct ssd *ssd)
 //     }
 // }
 
-/* 고칠거 */
-static struct ppa get_new_page(struct ssd *ssd)
+/**
+ * wpp: 이동할 라인 지정
+ * */
+static void ssd_advance_write_pointer(struct ssd *ssd, struct write_pointer *wpp)
 {
-    struct write_pointer *wpp = &ssd->wp;
+    struct ssdparams *spp = &ssd->sp;
+    struct line_mgmt *lm = &ssd->lm;
+
+    check_addr(wpp->ch, spp->nchs);
+    wpp->ch++;
+    if (wpp->ch == spp->nchs) {
+        wpp->ch = 0;
+        check_addr(wpp->lun, spp->luns_per_ch);
+        wpp->lun++;
+        /* in this case, we should go to next lun */
+        if (wpp->lun == spp->luns_per_ch) {
+            wpp->lun = 0;
+            /* go to next page in the block */
+            check_addr(wpp->pg, spp->pgs_per_blk);
+            wpp->pg++;
+            if (wpp->pg == spp->pgs_per_blk) {
+                wpp->pg = 0;
+                /* move current line to {victim,full} line list */
+                if (wpp->curline->vpc == spp->pgs_per_line) {
+                    /* all pgs are still valid, move to full line list */
+                    ftl_assert(wpp->curline->ipc == 0);
+                    QTAILQ_INSERT_TAIL(&lm->full_line_list, wpp->curline, entry);
+                    lm->full_line_cnt++;
+                } else {
+                    ftl_assert(wpp->curline->vpc >= 0 && wpp->curline->vpc < spp->pgs_per_line);
+                    /* there must be some invalid pages in this line */
+                    ftl_assert(wpp->curline->ipc > 0);
+                    pqueue_insert(lm->victim_line_pq, wpp->curline);
+                    lm->victim_line_cnt++;
+                }
+                /* current line is used up, pick another empty line */
+                check_addr(wpp->blk, spp->blks_per_pl);
+                wpp->curline = NULL;
+                wpp->curline = get_next_free_line(ssd);
+                if (!wpp->curline) {
+                    /* TODO */
+                    abort();
+                }
+                wpp->blk = wpp->curline->id;
+                check_addr(wpp->blk, spp->blks_per_pl);
+                /* make sure we are starting from page 0 in the super block */
+                ftl_assert(wpp->pg == 0);
+                ftl_assert(wpp->lun == 0);
+                ftl_assert(wpp->ch == 0);
+                /* TODO: assume # of pl_per_lun is 1, fix later */
+                ftl_assert(wpp->pl == 0);
+            }
+        }
+    }
+}
+
+/* 고칠거 */
+// static struct ppa get_new_page(struct ssd *ssd)
+// {
+//     struct write_pointer *wpp = &ssd->wp;
+//     struct ppa ppa;
+//     ppa.ppa = 0;
+//     ppa.g.ch = wpp->ch;
+//     ppa.g.lun = wpp->lun;
+//     ppa.g.pg = wpp->pg;
+//     ppa.g.blk = wpp->blk;
+//     ppa.g.pl = wpp->pl;
+//     ftl_assert(ppa.g.pl == 0);
+
+//     return ppa;
+// }
+
+/**
+ * wpp: 새로운 페이지를 받을 write_pointer
+ * hot, cold 둘 중 하나로 정해짐.
+ */
+static struct ppa get_new_page(struct write_pointer *wpp)
+{
     struct ppa ppa;
     ppa.ppa = 0;
     ppa.g.ch = wpp->ch;
@@ -442,7 +485,8 @@ void ssd_init(FemuCtrl *n)
     ssd_init_lines(ssd);
 
     /* initialize write pointer, this is how we allocate new pages for writes */
-    ssd_init_write_pointer(ssd);
+    ssd_init_write_pointer(ssd, &ssd->wp_for_cold);
+    ssd_init_write_pointer(ssd, &ssd->wp_for_hot);
 
     qemu_thread_create(&ssd->ftl_thread, "FEMU-FTL-Thread", ftl_thread, n,
                        QEMU_THREAD_JOINABLE);
@@ -691,7 +735,13 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
     uint64_t lpn = get_rmap_ent(ssd, old_ppa);
 
     ftl_assert(valid_lpn(ssd, lpn));
-    new_ppa = get_new_page(ssd);
+    // new_ppa = get_new_page(ssd);
+
+    if (is_cold_page(ssd, lpn)) {
+        new_ppa = get_new_page(&ssd->wp_for_cold);
+    } else {
+        new_ppa = get_new_page(&ssd->wp_for_hot);
+    }
     /* update maptbl */
     set_maptbl_ent(ssd, lpn, &new_ppa);
     /* update rmap */
@@ -700,7 +750,12 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
     mark_page_valid(ssd, &new_ppa);
 
     /* need to advance the write pointer here */
-    ssd_advance_write_pointer(ssd);
+    // ssd_advance_write_pointer(ssd);
+    if (is_cold_page(ssd, lpn)) {
+        ssd_advance_write_pointer(ssd, &ssd->wp_for_cold);
+    } else {
+        ssd_advance_write_pointer(ssd, &ssd->wp_for_hot);
+    }
 
     if (ssd->sp.enable_gc_delay) {
         struct nand_cmd gcw;
@@ -902,10 +957,17 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
             mark_page_invalid(ssd, &ppa);
             set_rmap_ent(ssd, INVALID_LPN, &ppa);
         }
-        ssd->moni.map_access_count[lpn]++;
 
         /* new write */
-        ppa = get_new_page(ssd);
+        // ppa = get_new_page(ssd);
+
+        /* 새 페이지 얻기 -> hot or col에 따라 다름.*/
+        if (is_cold_page(ssd, lpn)) {
+            ppa = get_new_page(&ssd->wp_for_cold);
+        } else {
+            ppa = get_new_page(&ssd->wp_for_hot);
+        }
+
         /* update maptbl */
         set_maptbl_ent(ssd, lpn, &ppa);
         /* update rmap */
@@ -914,7 +976,15 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         mark_page_valid(ssd, &ppa);
 
         /* need to advance the write pointer here */
-        ssd_advance_write_pointer(ssd);
+        // ssd_advance_write_pointer(ssd);
+
+        if (is_cold_page(ssd, lpn)) {
+            ssd_advance_write_pointer(ssd, &ssd->wp_for_cold);
+        } else {
+            ssd_advance_write_pointer(ssd, &ssd->wp_for_hot);
+        }
+
+        ssd->moni.map_access_count[lpn]++;
 
         struct nand_cmd swr;
         swr.type = USER_IO;
