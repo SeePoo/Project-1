@@ -7,12 +7,12 @@
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
 
-#define IOPS_FLAG			1
-#define THROUGHPUT_FLAG		2
-#define WAF_FLAG			4
-#define GC_FLAG				8
-#define MAX_ACCESS_COUNT	10000
-
+#define IOPS_FLAG           1
+#define THROUGHPUT_FLAG     2
+#define WAF_FLAG            4
+#define GC_FLAG             8
+#define MAX_ACCESS_COUNT    10000
+#define THRESHOLD           0
 
 enum {
     NAND_READ =  0,
@@ -203,36 +203,36 @@ struct nand_cmd {
 
 struct s_monitering {
     /* 로그 출력용 파일포인터 */
-	FILE *IOPS;
-	FILE *throughput;
-	FILE *GC;
-	FILE *WAF;
+    FILE *IOPS;
+    FILE *throughput;
+    FILE *GC;
+    FILE *WAF;
     FILE *CDF;
 
     /* 1초, 10초 간격을 세기위한 시간변수 */
-	uint64_t init_time;
+    uint64_t init_time;
     uint64_t curr_time_1sec;
     uint64_t prev_time_1sec;
     uint64_t curr_time_10sec;
     uint64_t prev_time_10sec;
 
     /* IOPS 수집 변수 */
-	uint64_t read_IO;
-	uint64_t write_IO;
+    uint64_t read_IO;
+    uint64_t write_IO;
 
     /* throughput 수집 변수 */
     uint64_t read_throughput;
-	uint64_t write_throughput;
+    uint64_t write_throughput;
     
     /* GC 수집 변수 */
     uint64_t gc_erase_block_count;
     
     /* WAF 수집 변수 */
     uint64_t req_size;
-	uint64_t gc_data_size_for_WAF;
+    uint64_t gc_data_size_for_WAF;
 
-	/* LPN별 접근 횟수 배열 - tt_pgs 크기를 가짐.*/
-	uint64_t *map_access_count;
+    /* LPN별 접근 횟수 배열 - tt_pgs 크기를 가짐.*/
+    uint64_t *map_access_count;
 };
 
 struct ssd {
@@ -253,7 +253,7 @@ struct ssd {
     struct write_pointer wp_for_hot;
     struct write_pointer wp_for_cold;
     /* 모니터링 용 구조체 변수 */
-	struct s_monitering moni;
+    struct s_monitering moni;
 };
 
 
