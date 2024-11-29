@@ -936,68 +936,68 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     return maxlat;
 }
 
-static void LPN_status(struct ssd *ssd) {
-    FILE *ssd_LPN_status = fopen("log_LPN_status", "w");
-    struct ssdparams *spp = &ssd->sp;
-    struct ppa tmp_ppa;
+// static void LPN_status(struct ssd *ssd) {
+//     FILE *ssd_LPN_status = fopen("log_LPN_status", "w");
+//     struct ssdparams *spp = &ssd->sp;
+//     struct ppa tmp_ppa;
 
-    int ch_idx;
-    int lun_idx;
-    int pl_idx;
-    int blk_idx;
-    int pg_idx;
+//     int ch_idx;
+//     int lun_idx;
+//     int pl_idx;
+//     int blk_idx;
+//     int pg_idx;
 
-    uint64_t tmp_lpn;
-    uint64_t access_count;
-    // printf("tt_pgs %d and mytt_pgs %d\r\n", spp->tt_pgs, spp->nchs * spp->luns_per_ch * spp->pls_per_lun * spp->blks_per_pl * spp->pgs_per_blk);
-    for (blk_idx = 0; blk_idx < spp->blks_per_pl; blk_idx++) {
-        for (pg_idx = 0; pg_idx < spp->pgs_per_blk; pg_idx++) {
-            for (ch_idx = 0; ch_idx < spp->nchs; ch_idx++) {
-                for (lun_idx = 0; lun_idx < spp->luns_per_ch; lun_idx++) {
-                    tmp_ppa.g.ch = ch_idx;
-                    tmp_ppa.g.lun = lun_idx;
-                    tmp_ppa.g.pl = pl_idx = 0;
-                    tmp_ppa.g.blk = blk_idx;
-                    tmp_ppa.g.pg = pg_idx;
-                    tmp_lpn = ppa2pgidx(ssd, &tmp_ppa);
-                    access_count = ssd->moni.map_access_count[tmp_lpn];
-                    if (access_count < 4) {
-                        fprintf(ssd_LPN_status, "\033[0;44m%03ld\033[0m", access_count);
-                    } else if (access_count < 8) {
-                        fprintf(ssd_LPN_status, "\033[0;46m%03ld\033[0m", access_count);
-                    } else if (access_count < 12) {
-                        fprintf(ssd_LPN_status, "\033[0;42m%03ld\033[0m", access_count);
-                    } else if (access_count < 16) {
-                        fprintf(ssd_LPN_status, "\033[0;43m%03ld\033[0m", access_count);
-                    } else {
-                        fprintf(ssd_LPN_status, "\033[0;41m%03ld\033[0m", access_count);
-                    }
-                }
-            }
-        }
-        fprintf(ssd_LPN_status, "\n\n");
-    }
-    /*
-    3	4	f	1	2
-    ch	lun	pl	bl	pg
-    0	0	0	0	0
-    0	1	0	0	0
-    1	0	0	0	0
-    1	1	0	0	0
-    2	0	0	0	0
-    2	1	0	0	0
-    3	0	0	0	0
-    3	1	0	0	0
-    0	0	0	0	1
-    .
-    .
-    .
-    0	0	0	1	0
-    */
+//     uint64_t tmp_lpn;
+//     uint64_t access_count;
+//     // printf("tt_pgs %d and mytt_pgs %d\r\n", spp->tt_pgs, spp->nchs * spp->luns_per_ch * spp->pls_per_lun * spp->blks_per_pl * spp->pgs_per_blk);
+//     for (blk_idx = 0; blk_idx < spp->blks_per_pl; blk_idx++) {
+//         for (pg_idx = 0; pg_idx < spp->pgs_per_blk; pg_idx++) {
+//             for (ch_idx = 0; ch_idx < spp->nchs; ch_idx++) {
+//                 for (lun_idx = 0; lun_idx < spp->luns_per_ch; lun_idx++) {
+//                     tmp_ppa.g.ch = ch_idx;
+//                     tmp_ppa.g.lun = lun_idx;
+//                     tmp_ppa.g.pl = pl_idx = 0;
+//                     tmp_ppa.g.blk = blk_idx;
+//                     tmp_ppa.g.pg = pg_idx;
+//                     tmp_lpn = ppa2pgidx(ssd, &tmp_ppa);
+//                     access_count = ssd->moni.map_access_count[tmp_lpn];
+//                     if (access_count < 4) {
+//                         fprintf(ssd_LPN_status, "\033[0;44m%03ld\033[0m", access_count);
+//                     } else if (access_count < 8) {
+//                         fprintf(ssd_LPN_status, "\033[0;46m%03ld\033[0m", access_count);
+//                     } else if (access_count < 12) {
+//                         fprintf(ssd_LPN_status, "\033[0;42m%03ld\033[0m", access_count);
+//                     } else if (access_count < 16) {
+//                         fprintf(ssd_LPN_status, "\033[0;43m%03ld\033[0m", access_count);
+//                     } else {
+//                         fprintf(ssd_LPN_status, "\033[0;41m%03ld\033[0m", access_count);
+//                     }
+//                 }
+//             }
+//         }
+//         fprintf(ssd_LPN_status, "\n\n");
+//     }
+//     /*
+//     3	4	f	1	2
+//     ch	lun	pl	bl	pg
+//     0	0	0	0	0
+//     0	1	0	0	0
+//     1	0	0	0	0
+//     1	1	0	0	0
+//     2	0	0	0	0
+//     2	1	0	0	0
+//     3	0	0	0	0
+//     3	1	0	0	0
+//     0	0	0	0	1
+//     .
+//     .
+//     .
+//     0	0	0	1	0
+//     */
 
-    fflush(ssd_LPN_status);
-    fclose(ssd_LPN_status);
-}
+//     fflush(ssd_LPN_status);
+//     fclose(ssd_LPN_status);
+// }
 
 /****************************
  * MONITERING INIT FUNTIONS *
