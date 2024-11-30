@@ -12,7 +12,7 @@
 #define WAF_FLAG            4
 #define GC_FLAG             8
 #define MAX_ACCESS_COUNT    10000
-#define THRESHOLD           0
+#define THRESHOLD           42
 
 enum {
     NAND_READ =  0,
@@ -239,9 +239,10 @@ struct ssd {
     char *ssdname;
     struct ssdparams sp;
     struct ssd_channel *ch;
+    // struct write_pointer wp;
+    struct write_pointer *wp;
     struct ppa *maptbl; /* page level mapping table */
     uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
-    struct write_pointer wp;
     struct line_mgmt lm;
 
     /* lockless ring for communication with NVMe IO thread */
