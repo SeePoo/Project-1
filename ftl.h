@@ -12,7 +12,7 @@
 #define WAF_FLAG            4
 #define GC_FLAG             8
 #define MAX_ACCESS_COUNT    10000
-#define THRESHOLD           42
+#define THRESHOLD           -1
 
 enum {
     NAND_READ =  0,
@@ -204,28 +204,17 @@ struct nand_cmd {
 struct s_monitering {
     /* 로그 출력용 파일포인터 */
     FILE *IOPS;
-    FILE *throughput;
-    FILE *GC;
     FILE *WAF;
     FILE *CDF;
 
     /* 1초, 10초 간격을 세기위한 시간변수 */
     uint64_t init_time;
-    uint64_t curr_time_1sec;
-    uint64_t prev_time_1sec;
     uint64_t curr_time_10sec;
     uint64_t prev_time_10sec;
 
     /* IOPS 수집 변수 */
     uint64_t read_IO;
     uint64_t write_IO;
-
-    /* throughput 수집 변수 */
-    uint64_t read_throughput;
-    uint64_t write_throughput;
-    
-    /* GC 수집 변수 */
-    uint64_t gc_erase_block_count;
     
     /* WAF 수집 변수 */
     uint64_t req_size;
