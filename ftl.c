@@ -904,7 +904,6 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         curlat = ssd_advance_status(ssd, &ppa, &swr);
         maxlat = (curlat > maxlat) ? curlat : maxlat;
     }
-
     /* nlb = 쓰는 섹터 수  */
     /* secsz = 섹터의 크기 */
     ssd->moni.write_IO++;

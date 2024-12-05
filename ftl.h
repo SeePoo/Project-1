@@ -7,11 +7,7 @@
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
 
-#define IOPS_FLAG           1
-#define THROUGHPUT_FLAG     2
-#define WAF_FLAG            4
-#define GC_FLAG             8
-#define MAX_ACCESS_COUNT    10000
+#define MAX_ACCESS_COUNT    200000
 #define THRESHOLD           -1
 
 enum {
